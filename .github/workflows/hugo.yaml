@@ -1,112 +1,70 @@
-# Workflow to build and deploy site to Vercel using Hugo
+# Sample workflow for building and deploying a Hugo site to GitHub Pages
+name: Deploy Hugo site to Pages
 
-# Name of Workflow
-name: deploy-preview
-
-# Controls when the action will run. Triggers the workflow on push
-# events but only for the vercel-dev branch
 on:
+# Runs on pushes targeting the default branch
   push:
-    branches: [develop]
+      branches:
+      - main
+  
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+  
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+  # However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+  
+  # Default to bash
+defaults:
+   run:
+     shell: bash
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains two jobs called "deploy-preview" and "docsearch-scrape"
-  deploy-preview:
-    # The environment this job references
+# Build job
+  build:
+    runs-on: ubuntu-latest
+    env:
+      HUGO_VERSION: 0.118.2
+    steps:
+      - name: Install Hugo CLI
+        run: |
+          wget -O ${{ runner.temp }}/hugo.deb https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.deb \
+          && sudo dpkg -i ${{ runner.temp }}/hugo.deb
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v3
+      - name: Install Node.js dependencies
+        run: "[[ -f package-lock.json || -f npm-shrinkwrap.json ]] && npm ci || true"
+      - name: Build with Hugo
+        env:
+          # For maximum backward compatibility with Hugo modules
+          HUGO_ENVIRONMENT: production
+          HUGO_ENV: production
+        run: hugo --gc --minify --baseURL "${{ steps.pages.outputs.base_url }}/"
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v1
+        with:
+           path: ./public
+
+# Deployment job
+  deploy:
     environment:
-      name: Preview
-      url: ${{ steps.vercel-action.outputs.preview-url }}
-
-    # The type of runner that the job will run on
-    runs-on: ubuntu-22.04
-
-    # Job outputs
-    outputs:
-      docs: ${{ steps.filter.outputs.docs }}
-      docsearch_config: ${{ steps.filter.outputs.config }}
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
     steps:
-      # Step 1 - Checks-out your repository under $GITHUB_WORKSPACE
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          submodules: recursive # Fetch submodules
-          fetch-depth: 0 # Fetch all history for .GitInfo and .Lastmod
-
-      # Step 2 Detect changes to Docs Content
-      - name: Detect changes in doc content
-        uses: dorny/paths-filter@v2
-        id: filter
-        with:
-          filters: |
-            docs:
-              - 'content/docs/**'
-            config:
-              - 'docsearch-preview.json'
-          base: develop
-
-      # Step 3 - Install Hugo (specific version)
-      - name: Install Hugo
-        uses: peaceiris/actions-hugo@v2
-        with:
-          hugo-version: "0.120.4"
-          extended: true
-
-      # Step 4 - Builds the site using Hugo
-      - name: Build
-        run: hugo -v -D -e staging
-        env:
-          # HUGO_PARAMS_DOCSEARCH_indexName: ${{ secrets.ALGOLIA_INDEX_NAME }}
-          HUGO_PARAMS_DOCSEARCH_appID: ${{ vars.DOCSEARCH_APPID }}
-          HUGO_PARAMS_DOCSEARCH_apiKey: ${{ vars.DOCSEARCH_APIKEY }}
-          HUGO_PARAMS_DOCSEARCH_indexName: ${{ vars.DOCSEARCH_INDEXNAME }}
-          HUGO_PARAMS_PLAUSIBLE_dataDomain: ${{ secrets.PLAUSIBLE_DOMAIN }}
-          HUGO_GOOGLEANALYTICS: ${{ vars.HUGO_GOOGLEANALYTICS }}
-
-      # Step 5 - Push our generated site to Vercel
-      - name: Deploy to Vercel
-        uses: amondnet/vercel-action@v25
-        id: vercel-action
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }} # Required
-          #github-token: ${{ secrets.GITHUB_TOKEN }} #Optional
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }} #Required
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }} #Required
-          github-comment: false
-          #vercel-args: '--prod' #Optional
-          vercel-args: "--local-config ../vercel.json" #Optional
-          working-directory: public
-          alias-domains: | #Optional
-            lotusdocs-staging.vercel.app
-
-  docsearch-scrape:
-
-    # The type of runner that the job will run on
-    runs-on: ubuntu-20.04
-    needs: [deploy-preview]
-    # Run job only if there are changes to 'content/docs/**' or 'docsearch-preview.json'
-    if: |
-      needs.deploy-preview.outputs.docs == 'true' ||
-      needs.deploy-preview.outputs.docsearch_config == 'true'
-
-    steps:
-      # Step 1 - Checks-out your repository under $GITHUB_WORKSPACE
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      # Step 2 - Format and output DocSearch config
-      - name: Output formatted docsearch-*.json as config
-        id: docsearch-config
-        # run: echo "::set-output name=config::$(cat docsearch-preview.json | jq -r tostring)"
-        run: echo "config=$(cat docsearch-preview.json | jq -r tostring)" >> $GITHUB_OUTPUT
-
-      # Step 3 - Update DocSearch Index (only if content files were changed)
-      - name: Algolia DocSearch Crawl & Index
-        id: docsearch-scrape
-        uses: adapttive/algolia-docsearch-action@1.1.1
-        env:
-          APPLICATION_ID: ${{ secrets.ALGOLIA_APPLICATION_ID }}
-          API_KEY: ${{ secrets.ALGOLIA_ADMIN_API_KEY }}
-          CONFIG: ${{ steps.docsearch-config.outputs.config }}
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v2
